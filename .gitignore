@@ -1,0 +1,20 @@
+# Dependencies and generated packages
+node_modules/
+lib/
+*.tgz
+
+# Runtime output and local configuration
+.dsh/
+.playwright-cli/
+output/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Editors and operating system
+.DS_Store
+.idea/
+.vscode/
+*.swp

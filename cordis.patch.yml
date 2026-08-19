@@ -1,0 +1,7 @@
+- insert:
+    - id: test-assistant
+      name: 'dsh-test-assistant'
+      config:
+        enabled: true
+        announceToAgent: true
+        autoDetect: true

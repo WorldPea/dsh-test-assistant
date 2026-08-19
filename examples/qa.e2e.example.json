@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "defaultEnvironment": "test",
+  "artifactsDir": ".dsh/qa-runs",
+  "allowDestructive": false,
+  "requirements": [
+    { "id": "REQ-LOGIN", "title": "用户可以登录", "risk": "critical" },
+    { "id": "REQ-PROFILE", "title": "登录用户信息一致", "risk": "major" }
+  ],
+  "environments": {
+    "test": {
+      "baseUrl": "http://127.0.0.1:5173",
+      "variables": {
+        "vendorId": "1001"
+      },
+      "browser": {
+        "channel": "chrome",
+        "headless": true,
+        "ignoreHTTPSErrors": false,
+        "setup": [
+          { "action": "goto", "url": "/login" },
+          { "action": "fill", "selector": "[name=username]", "value": "${env:QA_USERNAME}" },
+          { "action": "fill", "selector": "[name=password]", "value": "${env:QA_PASSWORD}" },
+          { "action": "click", "selector": "button[type=submit]" },
+          { "action": "waitFor", "selector": "[data-testid=home]" }
+        ]
+      },
+      "database": {
+        "type": "mysql",
+        "hostEnv": "QA_DB_HOST",
+        "port": 3306,
+        "databaseEnv": "QA_DB_NAME",
+        "userEnv": "QA_DB_USER",
+        "passwordEnv": "QA_DB_PASSWORD",
+        "maxRows": 100
+      },
+      "logs": {
+        "backend": {
+          "type": "http",
+          "url": "https://logs.example.internal/search",
+          "method": "POST",
+          "headers": {
+            "Authorization": "Bearer ${env:QA_LOG_TOKEN}"
+          },
+          "queryField": "query"
+        }
+      },
+      "services": {
+        "java-backend": {
+          "cwd": "backend",
+          "command": ["mvn", "spring-boot:run"],
+          "healthUrl": "http://127.0.0.1:8080/actuator/health",
+          "startupTimeoutMs": 120000
+        },
+        "python-service": {
+          "cwd": "python-service",
+          "command": ["python", "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8090"],
+          "healthUrl": "http://127.0.0.1:8090/health",
+          "startupTimeoutMs": 60000
+        },
+        "frontend": {
+          "cwd": "frontend",
+          "command": ["npm", "run", "dev", "--", "--host", "127.0.0.1"],
+          "healthUrl": "http://127.0.0.1:5173",
+          "startupTimeoutMs": 60000
+        }
+      }
+    }
+  },
+  "suites": [
+    {
+      "id": "full-stack-regression",
+      "name": "全栈登录回归",
+      "cases": [
+        {
+          "id": "login-success",
+          "name": "登录并核对页面、API、DB 和日志",
+          "risk": "read",
+          "tags": ["smoke", "login"],
+          "requirements": ["REQ-LOGIN", "REQ-PROFILE"],
+          "steps": [
+            { "id": "java-test", "type": "project.test", "project": "backend", "framework": "maven" },
+            { "id": "python-test", "type": "project.test", "project": "python-service", "framework": "pytest" },
+            { "id": "frontend-test", "type": "project.test", "project": "frontend", "framework": "vitest" },
+            { "id": "backend", "type": "service.start", "service": "java-backend" },
+            { "id": "python", "type": "service.start", "service": "python-service" },
+            { "id": "frontend", "type": "service.start", "service": "frontend" },
+            { "id": "home", "type": "ui", "action": "assertText", "selector": "h1", "text": "首页" },
+            {
+              "id": "profile-api",
+              "type": "api",
+              "method": "GET",
+              "url": "/api/profile",
+              "useBrowserSession": true,
+              "checks": [
+                { "path": "status", "operator": "eq", "expected": 200 },
+                { "path": "json.username", "operator": "eq", "expected": "${env:QA_USERNAME}" }
+              ]
+            },
+            {
+              "id": "account-db",
+              "type": "db.query",
+              "sql": "select status from account where username = ?",
+              "params": ["${env:QA_USERNAME}"],
+              "checks": [
+                { "path": "rows.0.status", "operator": "eq", "expected": "ACTIVE" }
+              ]
+            },
+            {
+              "id": "login-log",
+              "type": "log.query",
+              "source": "backend",
+              "query": "username=${env:QA_USERNAME} AND event=LOGIN_SUCCESS",
+              "checks": [
+                { "path": "body", "operator": "contains", "expected": "LOGIN_SUCCESS" }
+              ]
+            },
+            { "id": "evidence", "type": "ui", "action": "screenshot", "name": "login-success" }
+          ]
+        }
+      ]
+    }
+  ]
+}
