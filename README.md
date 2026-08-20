@@ -42,6 +42,10 @@ dsh plugin --profile web add link:$(pwd)
 
 工作台 Host API 只接受 loopback 请求，并使用当前会话 `sessionId` 在 Host 端解析工作区；浏览器不能传入任意本机路径。
 
+### 项目发现口径
+
+工作台不会展示工作区的所有目录。它默认向下扫描 3 层，只识别含 `pom.xml`、`build.gradle*`、Python 项目标志或 `package.json` 的技术项目。界面按应用分组：Maven/Gradle 聚合项目显示为一张顶层卡片，同类型子模块折叠在卡片内；独立前端、Python 项目保留为单独卡片。默认选择顶层应用，只有需要单独运行某个子模块时才展开勾选。
+
 敏感值只使用环境变量：
 
 ```json

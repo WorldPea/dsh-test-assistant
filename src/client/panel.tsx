@@ -48,6 +48,11 @@ interface SetupForm {
   logTokenEnv: string
 }
 
+interface ProjectGroup {
+  root: QaDetectedProject
+  modules: QaDetectedProject[]
+}
+
 const DEFAULT_FORM: SetupForm = {
   environment: 'test', baseUrl: '', browser: false, login: false, loginUrl: '/login',
   usernameSelector: '[name=username]', usernameEnv: 'QA_USERNAME',
@@ -63,6 +68,52 @@ const TASK_PROMPT = `执行本工作区的端到端 QA 自动化任务。
 2. 调用 qa_run；未经用户确认不得执行 write/destructive 用例。
 3. 调用 qa_report，汇总通过率、覆盖率、证据和待修复问题。
 4. qa_run.status 不是 passed 时，必须明确写测试失败或被阻塞。`
+
+const WORKBENCH_THEME = `
+.dsh-qa-workbench {
+  --qa-text: #172554;
+  --qa-muted: #64748b;
+  --qa-surface: rgba(255, 255, 255, .78);
+  --qa-surface-strong: rgba(248, 250, 252, .94);
+  --qa-surface-soft: rgba(239, 246, 255, .72);
+  --qa-input: rgba(255, 255, 255, .92);
+  --qa-input-text: #0f172a;
+  --qa-border: rgba(71, 85, 105, .24);
+  --qa-divider: rgba(100, 116, 139, .18);
+  --qa-primary: #315fae;
+  --qa-primary-soft: rgba(49, 95, 174, .12);
+  --qa-selected: rgba(219, 234, 254, .76);
+  --qa-link: #2563eb;
+  --qa-success: #15803d;
+  --qa-warning: #b45309;
+  --qa-danger: #b91c1c;
+  --qa-shadow: rgba(30, 64, 175, .12);
+  color-scheme: light;
+}
+body[data-ds-dark-theme] .dsh-qa-workbench {
+  --qa-text: #e5edf9;
+  --qa-muted: #9fb0c9;
+  --qa-surface: rgba(15, 23, 42, .82);
+  --qa-surface-strong: rgba(17, 24, 39, .94);
+  --qa-surface-soft: rgba(30, 41, 59, .78);
+  --qa-input: rgba(8, 15, 29, .9);
+  --qa-input-text: #e5edf9;
+  --qa-border: rgba(148, 163, 184, .28);
+  --qa-divider: rgba(148, 163, 184, .16);
+  --qa-primary: #4f7fd3;
+  --qa-primary-soft: rgba(79, 127, 211, .2);
+  --qa-selected: rgba(30, 64, 175, .28);
+  --qa-link: #93c5fd;
+  --qa-success: #86efac;
+  --qa-warning: #fbbf24;
+  --qa-danger: #fca5a5;
+  --qa-shadow: rgba(2, 6, 23, .34);
+  color-scheme: dark;
+}
+.dsh-qa-workbench input::placeholder { color: var(--qa-muted); opacity: .78; }
+.dsh-qa-workbench input[type="checkbox"] { accent-color: var(--qa-primary); }
+.dsh-qa-workbench button:disabled { cursor: not-allowed !important; opacity: .46; }
+`
 
 export function TestPanel({ t, sessionId }: TestPanelProps) {
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot | null>(null)
@@ -82,6 +133,11 @@ export function TestPanel({ t, sessionId }: TestPanelProps) {
   }
 
   useEffect(() => { void refresh().catch(cause => { setError(message(cause)) }) }, [sessionId])
+  useEffect(() => {
+    if (notice === '') return
+    const timer = setTimeout(() => { setNotice('') }, 3500)
+    return () => { clearTimeout(timer) }
+  }, [notice])
   useEffect(() => {
     if (snapshot === null) return
     setSelectedProjects(defaultProjectKeys(snapshot.discovery.projects))
@@ -138,7 +194,8 @@ export function TestPanel({ t, sessionId }: TestPanelProps) {
   const ready = snapshot?.configExists === true && readiness?.valid === true && readiness.missingEnvironmentVariables.length === 0
 
   return (
-    <div style={styles.container}>
+    <div className="dsh-qa-workbench" style={styles.container}>
+      <style>{WORKBENCH_THEME}</style>
       <header style={styles.header}>
         <div>
           <h2 style={styles.title}>{t('panel.title')}</h2>
@@ -162,6 +219,7 @@ export function TestPanel({ t, sessionId }: TestPanelProps) {
       {tab === 'overview' && <Overview snapshot={snapshot} onSetup={() => { setTab('setup') }} onCopy={() => { void copyPrompt() }} />}
       {tab === 'setup' && <Setup
         snapshot={snapshot} form={form} setForm={setForm} selected={selectedProjects}
+        setSelected={setSelectedProjects}
         toggleProject={key => { setSelectedProjects(toggle(selectedProjects, key)) }}
         onScaffold={() => { void scaffold() }} onSave={() => { void saveConnections() }}
       />}
@@ -195,16 +253,56 @@ function Overview({ snapshot, onSetup, onCopy }: { snapshot: WorkbenchSnapshot |
 
 function Setup(props: {
   snapshot: WorkbenchSnapshot | null; form: SetupForm; setForm(value: SetupForm): void
-  selected: Set<string>; toggleProject(key: string): void; onScaffold(): void; onSave(): void
+  selected: Set<string>; setSelected(value: Set<string>): void; toggleProject(key: string): void
+  onScaffold(): void; onSave(): void
 }) {
   const { snapshot, form } = props
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const projects = snapshot?.discovery.projects ?? []
+  const groups = useMemo(() => groupProjects(projects), [projects])
   const set = <K extends keyof SetupForm>(key: K, value: SetupForm[K]): void => props.setForm({ ...form, [key]: value })
   return <>
     <Card title="1. 选择项目">
-      {snapshot?.discovery.projects.length === 0 && <p style={styles.muted}>未识别到 Maven、Gradle、Python 或前端项目。</p>}
-      <div style={styles.projectList}>{snapshot?.discovery.projects.map(project => {
-        const key = projectKey(project)
-        return <label key={key} style={styles.checkRow}><input type="checkbox" checked={props.selected.has(key)} onChange={() => { props.toggleProject(key) }} /><span><b>{project.path}</b><small>{project.kind} · {project.framework}</small></span></label>
+      <div style={styles.projectToolbar}>
+        <div>
+          <b>{groups.length} 个应用</b>
+          <span style={styles.toolbarHint}>扫描到 {projects.length} 个技术项目/模块，子模块默认折叠</span>
+        </div>
+        <div style={styles.toolbarActions}>
+          <span style={styles.selectedCount}>已选 {props.selected.size}</span>
+          <button type="button" style={styles.textButton} onClick={() => { props.setSelected(defaultProjectKeys(projects)) }}>选择顶层</button>
+          <button type="button" style={styles.textButton} onClick={() => { props.setSelected(new Set()) }}>清空</button>
+        </div>
+      </div>
+      {projects.length === 0 && <p style={styles.muted}>未识别到 Maven、Gradle、Python 或前端项目。</p>}
+      <div style={styles.projectList}>{groups.map(group => {
+        const key = projectKey(group.root)
+        const isExpanded = expanded.has(key)
+        return <article key={key} style={{ ...styles.projectCard, ...(props.selected.has(key) ? styles.projectCardSelected : {}) }}>
+          <label style={styles.projectHeader}>
+            <input style={styles.projectCheckbox} type="checkbox" checked={props.selected.has(key)} onChange={() => { props.toggleProject(key) }} />
+            <span style={styles.projectIcon}>{projectIcon(group.root.kind)}</span>
+            <span style={styles.projectIdentity}>
+              <b style={styles.projectName}>{projectName(group.root.path)}</b>
+              <small style={styles.projectPath}>{group.root.path}</small>
+            </span>
+            <span style={styles.projectBadge}>{projectLabel(group.root)}</span>
+          </label>
+          <div style={styles.projectMeta}>
+            <span>测试命令：{group.root.testCommand.join(' ')}</span>
+            {group.modules.length > 0 && <button type="button" style={styles.moduleToggle} onClick={() => { setExpanded(toggle(expanded, key)) }}>
+              {isExpanded ? '收起' : '展开'} {group.modules.length} 个子模块
+            </button>}
+          </div>
+          {isExpanded && <div style={styles.moduleList}>{group.modules.map(module => {
+            const moduleKey = projectKey(module)
+            return <label key={moduleKey} style={styles.moduleRow}>
+              <input type="checkbox" checked={props.selected.has(moduleKey)} onChange={() => { props.toggleProject(moduleKey) }} />
+              <span>{projectName(module.path)}</span>
+              <small>{module.framework}</small>
+            </label>
+          })}</div>}
+        </article>
       })}</div>
     </Card>
     <Card title="2. 测试环境">
@@ -377,21 +475,40 @@ function defaultProjectKeys(projects: QaDetectedProject[]): Set<string> {
   }
   return new Set(selected.map(projectKey))
 }
+function groupProjects(projects: QaDetectedProject[]): ProjectGroup[] {
+  const sorted = [...projects].sort((a, b) => a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path))
+  const groups: ProjectGroup[] = []
+  for (const project of sorted) {
+    const parent = groups.find(group => group.root.kind === project.kind && (group.root.path === '.' || project.path.startsWith(`${group.root.path}/`)))
+    if (parent === undefined) groups.push({ root: project, modules: [] })
+    else parent.modules.push(project)
+  }
+  return groups
+}
+function projectName(path: string): string { return path === '.' ? '工作区根项目' : path.split('/').at(-1) ?? path }
+function projectIcon(kind: string): string { return kind.startsWith('java') ? '☕' : kind === 'python' ? '🐍' : '◈' }
+function projectLabel(project: QaDetectedProject): string {
+  const kind = project.kind === 'java-maven' ? 'Java' : project.kind === 'java-gradle' ? 'Java' : project.kind === 'python' ? 'Python' : '前端'
+  return `${kind} · ${project.framework}`
+}
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause) }
 function icon(status: string): string { return status === 'passed' ? '✅' : status === 'failed' ? '❌' : status === 'blocked' ? '⛔' : '⏭️' }
 
 const styles: Record<string, CSSProperties> = {
-  container: { height: '100%', overflow: 'auto', padding: 24, color: 'var(--dsw-alias-label-primary, #e5e7eb)', background: 'var(--dsw-alias-bg-layer-1, #10131a)' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }, title: { margin: 0, fontSize: 24 }, subtitle: { margin: '7px 0 0', maxWidth: 760, color: 'var(--dsw-alias-label-secondary, #9ca3af)', wordBreak: 'break-all' },
-  badge: { flexShrink: 0, padding: '6px 11px', borderRadius: 999, fontSize: 12 }, badgeReady: { color: '#86efac', background: 'rgba(34,197,94,.14)' }, badgeWarning: { color: '#fbbf24', background: 'rgba(245,158,11,.14)' },
-  tabs: { display: 'flex', gap: 6, marginBottom: 18, padding: 4, borderRadius: 10, background: 'rgba(255,255,255,.04)' }, tab: { border: 0, padding: '8px 13px', borderRadius: 7, color: '#9ca3af', background: 'transparent', cursor: 'pointer' }, tabActive: { color: '#fff', background: '#315aa8' },
-  busy: { padding: 10, marginBottom: 12, borderRadius: 8, color: '#bfdbfe', background: 'rgba(59,130,246,.12)' }, error: { padding: 11, marginBottom: 12, borderRadius: 8, color: '#fca5a5', background: 'rgba(239,68,68,.12)' }, notice: { padding: 11, marginBottom: 12, borderRadius: 8, color: '#86efac', background: 'rgba(34,197,94,.12)' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }, metric: { display: 'flex', flexDirection: 'column', gap: 8, padding: 16, borderRadius: 11, border: '1px solid var(--dsw-alias-border-l2, #303744)', background: 'var(--dsw-alias-bg-layer-2, #171b24)' },
-  card: { marginBottom: 14, padding: 18, borderRadius: 12, border: '1px solid var(--dsw-alias-border-l2, #303744)', background: 'var(--dsw-alias-bg-layer-2, #171b24)' }, cardTitle: { margin: '0 0 14px', fontSize: 15 },
-  projectList: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 8 }, checkRow: { display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 8, background: 'rgba(255,255,255,.035)' },
-  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, margin: '12px 0' }, field: { display: 'flex', flexDirection: 'column', gap: 6, color: '#cbd5e1', fontSize: 12 }, input: { padding: '9px 10px', border: '1px solid #374151', borderRadius: 7, color: '#e5e7eb', background: '#111827' },
-  toggle: { display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0', cursor: 'pointer' }, actions: { display: 'flex', gap: 10, marginBottom: 18 }, button: { border: 0, borderRadius: 8, padding: '9px 14px', color: 'white', background: '#315aa8', cursor: 'pointer', fontWeight: 600 }, secondaryButton: { marginLeft: 10, border: '1px solid #4b5563', borderRadius: 8, padding: '8px 13px', color: '#d1d5db', background: 'transparent', cursor: 'pointer' }, dangerButton: { border: '1px solid #ef4444', borderRadius: 8, padding: '8px 13px', color: '#fca5a5', background: 'transparent', cursor: 'pointer' },
-  caseRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '11px 4px', borderBottom: '1px solid rgba(255,255,255,.06)' }, caseMain: { display: 'flex', flex: 1, flexDirection: 'column', gap: 4 }, readBadge: { padding: '3px 7px', borderRadius: 999, color: '#86efac', background: 'rgba(34,197,94,.12)', fontSize: 11 }, writeBadge: { padding: '3px 7px', borderRadius: 999, color: '#fbbf24', background: 'rgba(245,158,11,.12)', fontSize: 11 },
-  resultRow: { display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(255,255,255,.06)' }, issue: { display: 'flex', flexDirection: 'column', gap: 5, padding: '10px 0', color: '#fca5a5', borderBottom: '1px solid rgba(255,255,255,.06)' },
-  code: { display: 'block', padding: 10, borderRadius: 8, color: '#93c5fd', background: 'rgba(0,0,0,.24)', overflowWrap: 'anywhere' }, muted: { color: '#9ca3af', lineHeight: 1.6 }, warning: { color: '#fbbf24' }, success: { color: '#86efac' }, pills: { display: 'flex', flexWrap: 'wrap', gap: 7 }, pill: { padding: '4px 8px', borderRadius: 999, color: '#bfdbfe', background: 'rgba(59,130,246,.14)', fontSize: 12 }, errorList: { color: '#fca5a5', lineHeight: 1.7 },
+  container: { height: '100%', overflow: 'auto', padding: 24, color: 'var(--qa-text)', background: 'transparent' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }, title: { margin: 0, color: 'var(--qa-text)', fontSize: 24 }, subtitle: { margin: '7px 0 0', maxWidth: 760, color: 'var(--qa-muted)', wordBreak: 'break-all' },
+  badge: { flexShrink: 0, padding: '6px 11px', borderRadius: 999, fontSize: 12 }, badgeReady: { color: 'var(--qa-success)', background: 'color-mix(in srgb, var(--qa-success) 12%, transparent)' }, badgeWarning: { color: 'var(--qa-warning)', background: 'color-mix(in srgb, var(--qa-warning) 12%, transparent)' },
+  tabs: { display: 'flex', gap: 6, marginBottom: 18, padding: 4, border: '1px solid var(--qa-border)', borderRadius: 10, background: 'var(--qa-surface)' }, tab: { border: 0, padding: '8px 13px', borderRadius: 7, color: 'var(--qa-muted)', background: 'transparent', cursor: 'pointer' }, tabActive: { color: '#fff', background: 'var(--qa-primary)' },
+  busy: { padding: 10, marginBottom: 12, border: '1px solid color-mix(in srgb, var(--qa-primary) 28%, transparent)', borderRadius: 8, color: 'var(--qa-primary)', background: 'var(--qa-primary-soft)', backdropFilter: 'blur(8px)' }, error: { padding: 11, marginBottom: 12, border: '1px solid color-mix(in srgb, var(--qa-danger) 25%, transparent)', borderRadius: 8, color: 'var(--qa-danger)', background: 'color-mix(in srgb, var(--qa-danger) 9%, var(--qa-surface))', backdropFilter: 'blur(8px)' }, notice: { padding: 10, marginBottom: 12, border: '1px solid color-mix(in srgb, var(--qa-success) 24%, transparent)', borderRadius: 8, color: 'var(--qa-success)', background: 'color-mix(in srgb, var(--qa-success) 9%, var(--qa-surface))', backdropFilter: 'blur(8px)' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }, metric: { display: 'flex', flexDirection: 'column', gap: 8, padding: 16, border: '1px solid var(--qa-border)', borderRadius: 11, background: 'var(--qa-surface)', boxShadow: '0 8px 24px var(--qa-shadow)', backdropFilter: 'blur(10px)' },
+  card: { marginBottom: 14, padding: 18, border: '1px solid var(--qa-border)', borderRadius: 12, background: 'var(--qa-surface)', boxShadow: '0 10px 28px var(--qa-shadow)', backdropFilter: 'blur(12px)' }, cardTitle: { margin: '0 0 14px', color: 'var(--qa-text)', fontSize: 16 },
+  projectToolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--qa-divider)' }, toolbarHint: { marginLeft: 10, color: 'var(--qa-muted)', fontSize: 12 }, toolbarActions: { display: 'flex', alignItems: 'center', gap: 8 }, selectedCount: { padding: '4px 9px', borderRadius: 999, color: 'var(--qa-primary)', background: 'var(--qa-primary-soft)', fontSize: 12 }, textButton: { border: 0, padding: '5px 8px', color: 'var(--qa-link)', background: 'transparent', cursor: 'pointer' },
+  projectList: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 12 }, projectCard: { minWidth: 0, padding: 14, border: '1px solid var(--qa-border)', borderRadius: 10, background: 'var(--qa-surface-strong)', transition: 'border-color .15s, background .15s' }, projectCardSelected: { borderColor: 'color-mix(in srgb, var(--qa-primary) 70%, transparent)', background: 'var(--qa-selected)' },
+  projectHeader: { display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }, projectCheckbox: { width: 17, height: 17, flexShrink: 0 }, projectIcon: { display: 'grid', placeItems: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 9, color: 'var(--qa-text)', background: 'var(--qa-primary-soft)', fontSize: 17 }, projectIdentity: { display: 'flex', minWidth: 0, flex: 1, flexDirection: 'column', gap: 3 }, projectName: { overflow: 'hidden', color: 'var(--qa-text)', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14 }, projectPath: { overflow: 'hidden', color: 'var(--qa-muted)', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }, projectBadge: { flexShrink: 0, padding: '4px 8px', borderRadius: 999, color: 'var(--qa-text)', background: 'var(--qa-surface-soft)', fontSize: 11 },
+  projectMeta: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--qa-divider)', color: 'var(--qa-muted)', fontSize: 11 }, moduleToggle: { border: 0, flexShrink: 0, padding: 0, color: 'var(--qa-link)', background: 'transparent', cursor: 'pointer', fontSize: 11 }, moduleList: { display: 'grid', gap: 5, marginTop: 10, padding: 9, borderRadius: 8, background: 'var(--qa-surface-soft)' }, moduleRow: { display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr) auto', alignItems: 'center', gap: 8, padding: '5px 3px', color: 'var(--qa-text)', fontSize: 12 },
+  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, margin: '12px 0' }, field: { display: 'flex', flexDirection: 'column', gap: 6, color: 'var(--qa-text)', fontSize: 12 }, input: { padding: '9px 10px', border: '1px solid var(--qa-border)', borderRadius: 7, color: 'var(--qa-input-text)', background: 'var(--qa-input)', outlineColor: 'var(--qa-primary)' },
+  toggle: { display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0', color: 'var(--qa-text)', cursor: 'pointer' }, actions: { display: 'flex', gap: 10, marginBottom: 18 }, button: { border: 0, borderRadius: 8, padding: '9px 14px', color: '#fff', background: 'var(--qa-primary)', cursor: 'pointer', fontWeight: 600 }, secondaryButton: { marginLeft: 10, border: '1px solid var(--qa-border)', borderRadius: 8, padding: '8px 13px', color: 'var(--qa-text)', background: 'var(--qa-surface-strong)', cursor: 'pointer' }, dangerButton: { border: '1px solid var(--qa-danger)', borderRadius: 8, padding: '8px 13px', color: 'var(--qa-danger)', background: 'transparent', cursor: 'pointer' },
+  caseRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '11px 4px', borderBottom: '1px solid var(--qa-divider)' }, caseMain: { display: 'flex', flex: 1, flexDirection: 'column', gap: 4 }, readBadge: { padding: '3px 7px', borderRadius: 999, color: 'var(--qa-success)', background: 'color-mix(in srgb, var(--qa-success) 10%, transparent)', fontSize: 11 }, writeBadge: { padding: '3px 7px', borderRadius: 999, color: 'var(--qa-warning)', background: 'color-mix(in srgb, var(--qa-warning) 10%, transparent)', fontSize: 11 },
+  resultRow: { display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid var(--qa-divider)' }, issue: { display: 'flex', flexDirection: 'column', gap: 5, padding: '10px 0', color: 'var(--qa-danger)', borderBottom: '1px solid var(--qa-divider)' },
+  code: { display: 'block', padding: 10, border: '1px solid var(--qa-border)', borderRadius: 8, color: 'var(--qa-link)', background: 'var(--qa-surface-soft)', overflowWrap: 'anywhere' }, muted: { color: 'var(--qa-muted)', lineHeight: 1.6 }, warning: { color: 'var(--qa-warning)' }, success: { color: 'var(--qa-success)' }, pills: { display: 'flex', flexWrap: 'wrap', gap: 7 }, pill: { padding: '4px 8px', borderRadius: 999, color: 'var(--qa-primary)', background: 'var(--qa-primary-soft)', fontSize: 12 }, errorList: { color: 'var(--qa-danger)', lineHeight: 1.7 },
 }
