@@ -25,13 +25,22 @@ dsh plugin --profile web add link:$(pwd)
 
 ## 工作区配置
 
-在被测项目创建：
+优先在 Harness 会话的“端到端 QA”页签使用工作台向导。工作台会：
+
+1. 自动识别 Java Maven/Gradle、Python 和前端子项目。
+2. 引导配置页面/API 地址、登录选择器、DB 与日志环境变量引用。
+3. 自动生成、校验并原子保存配置；覆盖旧配置时保留 `.bak`。
+4. 展示测试用例，直接执行只读测试并查看报告。
+
+工作台最终仍在被测项目维护同一份事实配置：
 
 ```text
 .dsh/qa.e2e.json
 ```
 
 可从 [`examples/qa.e2e.example.json`](examples/qa.e2e.example.json) 开始。完整设计见 [`docs/e2e-qa-assistant-design.md`](docs/e2e-qa-assistant-design.md)。
+
+工作台 Host API 只接受 loopback 请求，并使用当前会话 `sessionId` 在 Host 端解析工作区；浏览器不能传入任意本机路径。
 
 敏感值只使用环境变量：
 

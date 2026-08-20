@@ -19,7 +19,7 @@ const PLATFORM_MODULES = [
 
 const host: UserConfig = {
   name: PLUGIN_ID,
-  entry: { index: 'src/index.ts', qa: 'src/qa/index.ts' },
+  entry: { index: 'src/index.ts', qa: 'src/qa/index.ts', workbench: 'src/workbench.ts' },
   outDir: 'lib',
   format: ['esm'],
   platform: 'node',

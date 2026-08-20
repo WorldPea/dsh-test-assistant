@@ -10,6 +10,7 @@ import {
   runQaPlan,
   validateQaConfig,
 } from '../lib/qa.js'
+import { createWorkbenchConfig, readWorkbenchSnapshot, saveWorkbenchConfig } from '../lib/workbench.js'
 
 test('discovers Java Maven, Java Gradle, Python, and frontend projects', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-qa-discovery-'))
@@ -53,6 +54,43 @@ test('maps Java, Python, and frontend frameworks to safe argv commands', () => {
   assert.deepEqual(qaEngineInternals.defaultTestCommand('pytest', root, 'tests/test_api.py'), ['python', '-m', 'pytest', 'tests/test_api.py'])
   assert.deepEqual(qaEngineInternals.defaultTestCommand('vitest', root), ['npx', 'vitest', 'run'])
   assert.deepEqual(qaEngineInternals.defaultTestCommand('jest', root), ['npx', 'jest'])
+})
+
+test('workbench scaffolds a valid config and saves it atomically with backup', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-qa-workbench-'))
+  writeFileSync(join(root, 'pom.xml'), '<project/>')
+  mkdirSync(join(root, 'java-module'))
+  mkdirSync(join(root, 'frontend'))
+  writeFileSync(join(root, 'java-module', 'pom.xml'), '<project/>')
+  writeFileSync(join(root, 'frontend', 'package.json'), JSON.stringify({ devDependencies: { vitest: '^3.0.0' } }))
+  const discovery = discoverQaWorkspace(root)
+  const config = createWorkbenchConfig(discovery, {
+    environment: 'test',
+    baseUrl: 'http://127.0.0.1:5173',
+    browser: true,
+    login: {
+      enabled: true,
+      loginUrl: '/login',
+      usernameSelector: '#username',
+      usernameEnv: 'QA_USERNAME',
+      passwordSelector: '#password',
+      passwordEnv: 'QA_PASSWORD',
+      submitSelector: '#login',
+      successSelector: '#home',
+    },
+  })
+
+  assert.equal(validateQaConfig(config).valid, true)
+  assert.equal(config.suites.some(suite => suite.id === 'project-regression'), true)
+  assert.equal(config.suites.some(suite => suite.id === 'browser-smoke'), true)
+  assert.equal(config.suites.find(suite => suite.id === 'project-regression')?.cases.length, 2)
+  const first = saveWorkbenchConfig(root, config)
+  assert.equal(first.configExists, true)
+  assert.equal(first.validation?.valid, true)
+  config.artifactsDir = '.dsh/custom-runs'
+  saveWorkbenchConfig(root, config)
+  assert.equal(existsSync(join(root, '.dsh', 'qa.e2e.json.bak')), true)
+  assert.equal(readWorkbenchSnapshot(root).config?.artifactsDir, '.dsh/custom-runs')
 })
 
 test('runs service, browser, API, project command, local logs, and writes report', {

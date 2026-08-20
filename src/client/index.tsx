@@ -38,5 +38,6 @@ export function apply(ctx: ClientContext): void {
     order: 200,
     label: () => t('panel.title'),
     locale: NS,
+    inject: (sessionId) => ({ sessionId }),
   }, TestPanel))
 }

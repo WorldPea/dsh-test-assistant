@@ -8,14 +8,16 @@ import z from 'schemastery'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-agent'
 import { testRunTool, testGenTool, testFixTool } from './tools.js'
 import { qaTools } from './qa/tools.js'
+import { registerWorkbenchRoutes } from './workbench-routes.js'
 
 /** 稳定的 cordis 插件名 */
 export const name = 'test-assistant'
 
 /** 依赖的 cordis 服务 */
-export const inject = ['tools', 'systemPrompt', 'webServer']
+export const inject = ['tools', 'systemPrompt', 'webServer', 'agents']
 
 /** 设置命名空间 */
 export const TEST_NS = settingsNamespace('dsh-test-assistant')
@@ -103,10 +105,11 @@ export function apply(ctx: Context, config?: Config): void {
     onChange: sync,
   })
 
-  // 浏览器面板只展示能力状态；实际执行必须从有明确工作区的 Agent 工具进入。
+  // QA 工作台使用 sessionId 在 Host 端反查真实工作区；浏览器不能选择任意本机路径。
   ctx.effect(
     () => {
-      const d1 = ctx.webServer.register({
+      const disposers = registerWorkbenchRoutes(ctx)
+      disposers.push(ctx.webServer.register({
         kind: 'exact',
         path: '/api/dsh-test-assistant/status',
         async handler(req, res) {
@@ -117,14 +120,14 @@ export function apply(ctx: Context, config?: Config): void {
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({
             enabled: true,
-            capabilities: ['java', 'python', 'frontend', 'ui', 'api', 'mysql-readonly', 'logs', 'task-board'],
+            capabilities: ['java', 'python', 'frontend', 'ui', 'api', 'mysql-readonly', 'logs', 'task-board', 'workbench'],
             configPath: '.dsh/qa.e2e.json',
           }))
         },
-      })
-      return () => { d1() }
+      }))
+      return () => { for (const dispose of disposers.reverse()) dispose() }
     },
-    'dsh-test-assistant: capability api',
+    'dsh-test-assistant: workbench api',
   )
 
   sync()
